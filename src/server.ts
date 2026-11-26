@@ -1,0 +1,213 @@
+
+import 'dotenv/config';
+import express from 'express';
+import path from 'path';
+import multer from 'multer';
+import { createServer as createViteServer } from 'vite';
+import { GoogleGenAI } from "@google/genai";
+import PDFDocument from 'pdfkit';
+import axios from 'axios';
+import FormData from 'form-data';
+
+const app = express();
+const PORT = 3000;
+const PYTHON_API = 'http://localhost:8000';
+
+const upload = multer({
+  storage: multer.memoryStorage()
+});
+
+// Gemini Client Lazy Init
+let genAI: any = null;
+
+function getGemini() {
+  if (!genAI) {
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
+      throw new Error('GEMINI_API_KEY is missing');
+    }
+
+    genAI = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        apiVersion: 'v1beta',
+        headers: { 'User-Agent': 'aistudio-build' }
+      }
+    });
+  }
+
+  return genAI;
+}
+
+app.use(express.json());
+
+// API: Predict — Python MobileNetV2 is PRIMARY, Gemini is EXPLANATION only
+
+app.post('/api/predict', upload.single('image'), async (req, res) => {
+
+  if (!req.file) {
+    return res.status(400).json({ error: 'No image uploaded' });
+  }
+
+  // Step 1: Call Python FastAPI for MobileNetV2 classification
+  let mlResult: { prediction: string; confidence: number };
+
+  try {
+    const form = new FormData();
+
+    form.append('file', req.file.buffer, {
+      filename: req.file.originalname,
+      contentType: req.file.mimetype,
+    });
+
+    const pyResponse = await axios.post(`${PYTHON_API}/predict`, form, {
+      headers: form.getHeaders(),
+      timeout: 30000,
+    });
+
+    mlResult = pyResponse.data;
+
+  } catch (err: any) {
+    const detail = err.response?.data?.detail || err.message;
+
+    return res.status(502).json({
+      error: `Python model unavailable: ${detail}. Make sure Python backend is running on port 8000.`
+    });
+  }
+
+  // Step 2: Ask Gemini for explanation (non-blocking — failure is OK)
+  let reasoning = 'Explanation service unavailable. Classifier result is still valid.';
+  let clinicalNotes = 'Please consult a qualified radiologist for a definitive diagnosis.';
+
+  try {
+    const ai = getGemini();
+
+    const prompt = `
+A trained MobileNetV2 deep learning model analyzed a chest X-ray and produced this result:
+- Prediction: ${mlResult.prediction}
+- Confidence: ${mlResult.confidence}%
+
+Your role is ONLY to explain this result educationally.
+Do NOT re-diagnose or override the model.
+
+Return strictly valid JSON with these keys:
+{
+  "reasoning": "2-3 sentences explaining what visual patterns in chest X-rays typically indicate ${mlResult.prediction}, and what the model likely detected.",
+  "clinicalNotes": "2-3 sentences of general educational advice for a ${mlResult.prediction} result. Remind the user this is AI-assisted screening, not a medical diagnosis."
+}`;
+
+    const result = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: { parts: [{ text: prompt }] }
+    });
+
+    const jsonMatch = result.text.match(/\{[\s\S]*\}/);
+
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      reasoning = parsed.reasoning || reasoning;
+      clinicalNotes = parsed.clinicalNotes || clinicalNotes;
+    }
+
+  } catch (geminiErr: any) {
+    console.warn('Gemini explanation failed (non-fatal):', geminiErr.message);
+    // Keep fallback values — do NOT fail the request
+  }
+
+  // Step 3: Return combined result
+  res.json({
+    label: mlResult.prediction,
+    confidence: mlResult.confidence / 100,
+    confidencePercent: mlResult.confidence,
+    reasoning,
+    clinicalNotes,
+  });
+});
+
+// API: Generate Medical Report PDF
+app.post('/api/report', async (req, res) => {
+  try {
+    const { patientName, date, prediction } = req.body;
+
+    const doc = new PDFDocument();
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename=PneumoGuard_Report_${patientName.replace(/\s+/g, '_')}.pdf`
+    );
+
+    doc.pipe(res);
+
+    doc.fontSize(25).text('PneumoGuard AI - Medical Report', {
+      align: 'center'
+    });
+
+    doc.moveDown();
+
+    doc.fontSize(12).text(`Date: ${date}`);
+    doc.text(`Patient Name: ${patientName}`);
+
+    doc.moveDown();
+
+    doc.fontSize(16).text('Analysis Results:', {
+      underline: true
+    });
+
+    doc.moveDown();
+
+    doc.fontSize(14)
+      .fillColor(prediction.label === 'PNEUMONIA' ? 'red' : 'green')
+      .text(`Diagnosis: ${prediction.label}`);
+
+    doc.fillColor('black')
+      .fontSize(12)
+      .text(`Confidence Score: ${(prediction.confidence * 100).toFixed(2)}%`);
+
+    doc.moveDown();
+
+    doc.fontSize(14).text('Radiologist Observations (AI-Generated):');
+    doc.fontSize(12).text(prediction.reasoning);
+
+    doc.moveDown();
+
+    doc.fontSize(14).text('Clinical Notes:');
+    doc.fontSize(12).text(prediction.clinicalNotes);
+
+    doc.moveDown(2);
+
+    doc.fontSize(10)
+      .fillColor('gray')
+      .text(
+        'Disclaimer: This report is generated by an AI system (PneumoGuard AI) for educational and preliminary screening purposes only. It should not be treated as a final medical diagnosis. Please consult a qualified radiologist.',
+        { align: 'justify' }
+      );
+
+    doc.end();
+
+  } catch (error: any) {
+    console.error('Report Generation Error:', error);
+    res.status(500).json({
+      error: 'Failed to generate report'
+    });
+  }
+});
+
+async function startServer() {
+  const vite = await createViteServer({
+    server: {
+      middlewareMode: true,
+    },
+    appType: 'spa',
+  });
+
+  app.use(vite.middlewares);
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Python ML API expected at ${PYTHON_API}`);
+  });
+}
+
+startServer();

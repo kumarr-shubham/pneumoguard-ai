@@ -1,0 +1,23 @@
+# Environment
+.env
+.env.*
+!.env.example
+venv/
+.venv/
+
+# Dependencies
+node_modules/
+
+# Dataset
+dataset/
+
+# Generated models
+*.keras
+*.h5
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Build files
+dist/
