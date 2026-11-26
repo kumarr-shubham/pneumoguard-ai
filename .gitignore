@@ -14,6 +14,7 @@ dataset/
 # Generated models
 *.keras
 *.h5
+!src/backend_python/pneumonia_model_v3.keras
 
 # Python cache
 __pycache__/
