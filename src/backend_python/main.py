@@ -10,7 +10,10 @@ app = FastAPI(title="PneumoGuard AI - Python Backend")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+   allow_origins=[
+    "http://localhost:3000",
+    "https://pneumoguard-ai-l61m.vercel.app"
+],
     allow_methods=["*"],
     allow_headers=["*"],
 )
