@@ -112,6 +112,8 @@ Return strictly valid JSON with these keys:
 
   } catch (geminiErr: any) {
     console.warn('Gemini explanation failed (non-fatal):', geminiErr.message);
+    console.log('Gemini reasoning:', reasoning);
+    console.log('Gemini clinical notes:', clinicalNotes);
     // Keep fallback values — do NOT fail the request
   }
 
@@ -161,9 +163,14 @@ app.post('/api/report', async (req, res) => {
       .fillColor(prediction.label === 'PNEUMONIA' ? 'red' : 'green')
       .text(`Diagnosis: ${prediction.label}`);
 
-    doc.fillColor('black')
-      .fontSize(12)
-      .text(`Confidence Score: ${(prediction.confidence * 100).toFixed(2)}%`);
+    const confidenceValue =
+  prediction.confidence > 1
+    ? prediction.confidence
+    : prediction.confidence * 100;
+
+doc.fillColor('black')
+  .fontSize(12)
+  .text(`Confidence Score: ${confidenceValue.toFixed(2)}%`);
 
     doc.moveDown();
 

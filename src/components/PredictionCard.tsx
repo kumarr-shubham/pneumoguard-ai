@@ -16,7 +16,15 @@ export const PredictionCard: React.FC<PredictionCardProps> = ({
   isGeneratingReport 
 }) => {
   const isPneumonia = prediction.label === 'PNEUMONIA';
-  const confidencePercent = (prediction.confidence * 100).toFixed(1);
+  const confidenceValue =
+  prediction.confidence <= 1
+    ? prediction.confidence * 100
+    : prediction.confidence;
+
+const confidencePercent = Math.min(
+  100,
+  Math.max(0, confidenceValue)
+).toFixed(1);
 
   return (
     <motion.div

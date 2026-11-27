@@ -4,3 +4,5 @@ numpy
 Pillow
 tensorflow
 python-multipart
+google-genai
+python-dotenv
